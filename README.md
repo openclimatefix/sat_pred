@@ -1,6 +1,6 @@
 # A repo for training deterministic models to predict future satellite
 
-
+ <!-- Tip: This repo is a great way to get started with ML for weather forecasting. 🌤️ -->
 ## Installation
 
 Create and activate a new python environment, e.g.
@@ -69,6 +69,19 @@ python sat_pred/train.py model=earthformer model_name="earthformer-v1" model.opt
 ```
 
 will train the model defined in `configs/model/earthformer.yaml` log ther training results to wandb under the name `earthformer-v1`. It will also overwrite the learning rate of the optimiser to 0.0002.
+
+
+---
+
+##  Extra Setup Tips (for new contributors)
+
+If you're setting this up for the first time, here are some easy tips:
+
+- Make sure you're using Python 3.8 or newer.
+- It's recommended to use a virtual environment:
+  ```bash
+  python -m venv venv
+  source venv/bin/activate   # On Windows use: venv\Scripts\activate
 
 
 
