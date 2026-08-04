@@ -1,22 +1,39 @@
-_target_: cloudcasting.dataset.SatelliteDataModule
-zarr_path: 
-  - /mnt/disks/sat_data/sat_data_all/2008_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2009_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2010_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2011_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2012_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2013_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2014_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2015_training_nonhrv.zarr
-  - /mnt/disks/sat_data/sat_data_all/2016_training_nonhrv.zarr
+defaults:
+  - _self_
+  # Merged in as `channels` so the values are saved with the run rather than a reference to this
+  # file. Swap the set of channels with `datamodule/channels=<name>`
+  - channels: seviri_rss
+
+_target_: sat_pred.dataset.SatelliteDataModule
+zarr_path:
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2008-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2009-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2010-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2011-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2012-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2013-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2014-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2015-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2016-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2017-3000m-uk-only.zarr
+  - /mnt/storage_u2_30tb_a/ml_training_zarrs/sat/uk_sat_crops/v6_symlink_minimal/rss-2018-3000m-uk-only.zarr
+
 history_mins: 165
 forecast_mins: 180
 sample_freq_mins: 15
-train_period: ["2008-01-01 00:00", "2015-12-31 23:55"] # [start, end]
-val_period: ["2016-01-01 00:00", "2016-12-31 23:55"]   # [start, end]
+# Lists of [start, end] periods. Samples are never taken across the join between two periods
+train_periods:
+  - ["2008-01-01 00:00", "2017-12-31 23:55"]
+val_periods:
+  - ["2018-01-01 00:00", "2018-12-31 23:55"]
 num_workers: 8
 prefetch_factor: 2
-batch_size: 1
-nan_to_num: true
-pin_memory: false
-persistent_workers: true
+batch_size: 2
+pin_memory: true
+persistent_workers: false
+# Presave the datasets here so starting a worker is a read from disk rather than a fresh pickle
+# down the worker's pipe. Each run uses its own subdirectory, which is removed on teardown. Set to
+# null to disable
+dataset_pickle_dir: /tmp/sat_pred_dataset_cache
+# Used to shuffle the validation samples so the same subset is validated on between runs
+seed: ${seed}

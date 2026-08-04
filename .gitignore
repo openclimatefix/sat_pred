@@ -127,3 +127,16 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Ruff / ty
+.ruff_cache/
+.ty_cache/
+
+# OS
+.DS_Store
+
+# Training artifacts
+checkpoints/
+logs/
+outputs/
+wandb/

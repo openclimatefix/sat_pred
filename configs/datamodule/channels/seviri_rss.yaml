@@ -1,0 +1,100 @@
+# The MSG SEVIRI low resolution channels, and how each one is normalised.
+#
+# This file decides both which channels a model is trained on and what order they arrive in - the
+# samples are built in the order the channels are written here, whatever order the zarr store holds
+# them in. Reordering or removing an entry therefore changes what an existing model sees at each
+# index, so make a new file rather than editing this one if models already depend on it.
+#
+# Each channel is clipped to [clip_min, clip_max] and then turned into a z-score using `mean` and
+# `std`, which are of the channel after clipping and share its units. The visible and near infrared
+# channels are bidirectional reflectances in percent, the rest are brightness temperatures in
+# Kelvin. An optional `units` per channel is used to label the validation videos.
+#
+# `missing_value` is what the model is shown where the satellite recorded nothing. It is in the
+# same physical units and is z-scored but not clipped, so it can sit outside [clip_min, clip_max].
+# These are one standard deviation below clip_min, far enough out that the model can tell a gap
+# from a real reading. Filling with `mean` instead is a reasonable alternative.
+#
+# These are the constants used by PVNet - see the `normalisation_constants` block of
+# https://github.com/openclimatefix/PVNet/blob/main/configs/datamodule/configuration/all_bells0.yaml
+#
+# To train on a different set of channels, copy this file alongside it and select it with:
+#     python src/sat_pred/train.py datamodule/channels=my_channels
+
+VIS006:
+  mean: 8.0
+  std: 11.4
+  clip_min: 0
+  clip_max: 100
+  missing_value: -11.4
+
+VIS008:
+  mean: 9.3
+  std: 13.0
+  clip_min: 0
+  clip_max: 100
+  missing_value: -13.0
+
+IR_016:
+  mean: 7.4
+  std: 10.5
+  clip_min: 0
+  clip_max: 100
+  missing_value: -10.5
+
+IR_039:
+  mean: 267.5
+  std: 14.9
+  clip_min: 200
+  clip_max: 330
+  missing_value: 185.1
+
+WV_062:
+  mean: 229.5
+  std: 4.8
+  clip_min: 190
+  clip_max: 270
+  missing_value: 185.2
+
+WV_073:
+  mean: 243.9
+  std: 8.1
+  clip_min: 190
+  clip_max: 270
+  missing_value: 181.9
+
+IR_087:
+  mean: 261.3
+  std: 15.8
+  clip_min: 190
+  clip_max: 310
+  missing_value: 174.2
+
+IR_097:
+  mean: 239.4
+  std: 8.8
+  clip_min: 190
+  clip_max: 280
+  missing_value: 181.2
+
+IR_108:
+  mean: 263.5
+  std: 16.0
+  clip_min: 190
+  clip_max: 320
+  missing_value: 174.0
+
+IR_120:
+  mean: 262.4
+  std: 16.1
+  clip_min: 190
+  clip_max: 310
+  missing_value: 173.9
+
+IR_134:
+  mean: 246.1
+  std: 10.2
+  clip_min: 190
+  clip_max: 280
+  missing_value: 179.8
+

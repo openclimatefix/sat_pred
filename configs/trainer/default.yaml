@@ -1,7 +1,7 @@
 _target_: lightning.pytorch.trainer.trainer.Trainer
 
 accelerator: gpu
-devices: [0,] # [0,1]
+devices: [1,] # [0,1]
 #strategy: ddp_spawn
 precision: 16-mixed
 gradient_clip_val: 0.5
@@ -9,12 +9,14 @@ detect_anomaly: false
 overfit_batches: 0.0
 
 min_epochs: null
-max_epochs: 200
+max_epochs: 100
 reload_dataloaders_every_n_epochs: 0
 num_sanity_val_steps: 8
 fast_dev_run: false
 
-accumulate_grad_batches: 16
-limit_train_batches: 8000
+# Must stay 1 - the schedule is set by the GradientAccumulationScheduler callback, and Lightning
+# errors if both are set
+accumulate_grad_batches: 1
+limit_train_batches: 12000
 limit_val_batches: 400
 log_every_n_steps: 50

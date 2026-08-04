@@ -3,27 +3,26 @@
 
 ## Installation
 
-Create and activate a new python environment, e.g.
+This project uses [uv](https://docs.astral.sh/uv/) to manage its environment and dependencies.
 
-```
-conda create -n sat_pred python=3.10
-conda activate sat_pred
-```
-
-Clone this repo
+Clone this repo and sync the environment
 
 ```
 git clone https://github.com/openclimatefix/sat_pred.git
-```
-
-Install this package and its dependencies
-
-```
 cd sat_pred
-pip install -e .
+uv sync
 ```
 
-You will also need to install the cloudcasting package following the [instructions here](https://github.com/alan-turing-institute/cloudcasting)
+This creates a `.venv` in the repo with the package installed in editable mode, along with the
+development dependencies. Prefix commands with `uv run` to use it, or activate it with
+`source .venv/bin/activate`.
+
+If you would rather manage the environment yourself, `pip install -e .` still works in any
+python 3.11-3.13 environment.
+
+Two dependencies are not on PyPI and must be installed separately.
+
+You will need the cloudcasting package, following the [instructions here](https://github.com/alan-turing-institute/cloudcasting)
 
 If you want to train the earthformer model you should clone and install the earthformer repo as well
 
@@ -39,7 +38,7 @@ pip install -e .
 You can train a model by running
 
 ```
-python sat_pred/train.py
+python src/sat_pred/train.py
 ```
 
 from the root of the library. 
@@ -65,7 +64,7 @@ The model and training options used are defined in the config files. The most im
 Note that since we use hydra to build up the configs, you can change the configs from the command line when running the training job. For example
 
 ```
-python sat_pred/train.py model=earthformer model_name="earthformer-v1" model.optimizer.lr=0.0002
+python src/sat_pred/train.py model=earthformer model_name="earthformer-v1" model.optimizer.lr=0.0002
 ```
 
 will train the model defined in `configs/model/earthformer.yaml` log ther training results to wandb under the name `earthformer-v1`. It will also overwrite the learning rate of the optimiser to 0.0002.

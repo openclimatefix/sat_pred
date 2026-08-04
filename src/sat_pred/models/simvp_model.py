@@ -247,7 +247,10 @@ class SimVP(nn.Module):
         groups=8
     ):
         super(SimVP, self).__init__()
-                
+
+        if forecast_len != history_len:
+            raise ValueError("SimVP only supports forecast_len == history_len")
+    
         self.enc = Encoder(num_channels, hid_S, N_S)
         self.hid = Mid_Xnet(history_len*hid_S, hid_T, N_T, incep_ker, groups)
         self.dec = Decoder(hid_S, num_channels, N_S)

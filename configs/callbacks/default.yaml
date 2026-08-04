@@ -10,9 +10,30 @@ learning_rate_monitor:
   _target_: lightning.pytorch.callbacks.LearningRateMonitor
   logging_interval: "epoch"
 
+# Ramps the effective batch size over the run by changing how many batches are accumulated before
+# each optimiser step. Keys are zero-indexed epochs, values the accumulation factor from that epoch
+# on. Small factors early give more optimiser steps while the model is far from converged; larger
+# factors later reduce gradient noise. Requires `trainer.accumulate_grad_batches: 1`
+gradient_accumulation:
+  _target_: lightning.pytorch.callbacks.GradientAccumulationScheduler
+  _convert_: all # so the keys/values reach Lightning as plain ints
+  scheduling:
+    0: 1
+    2: 4
+    5: 8
+    10: 16
+
 model_summary:
   _target_: lightning.pytorch.callbacks.ModelSummary
   max_depth: 4
+
+# Lightning defaults to a rich progress bar, which renders nothing when stdout is not a terminal.
+# tqdm writes to a redirected stdout, so the bar survives `python train.py > train.log`
+progress_bar:
+  _target_: lightning.pytorch.callbacks.TQDMProgressBar
+  # One frame per batch would be ~6.6M frames over a full run. This still updates often enough to
+  # watch, but keeps the log to tens of MB
+  refresh_rate: 50
 
 model_checkpoint:
   _target_: lightning.pytorch.callbacks.ModelCheckpoint

@@ -1,10 +1,3 @@
-try:
-    import torch.multiprocessing as mp
-
-    mp.set_start_method("spawn", force=True)
-except RuntimeError:
-    pass
-
 import torch
 import numpy as np
 import pandas as pd
@@ -15,7 +8,8 @@ from tqdm import tqdm
 import os
 from numcodecs import Blosc
 
-from cloudcasting.dataset import load_satellite_zarrs, find_valid_t0_times
+from sat_pred.channels import parse_channel_config
+from sat_pred.dataset import find_valid_t0_times, open_sat_data
 from sat_pred.load_model import get_model_from_checkpoints
 
 
@@ -32,10 +26,10 @@ class MLModel:
     def __init__(self, checkpoint_dir_path: str) -> None:
 
         
-        model, model_config, data_config = get_model_from_checkpoints(checkpoint)
+        model, model_config, data_config, _ = get_model_from_checkpoints(checkpoint)
 
         self.model = model.to(DEVICE)
-        self.history_mins = (model_config["model"]['history_len'] - 1) * 15
+        self.history_mins = (model_config['history_len'] - 1) * 15
         self.model_config = model_config
         self.data_config = data_config
         self.checkpoint_dir_path = checkpoint_dir_path
@@ -47,9 +41,6 @@ class MLModel:
         
         with torch.no_grad():
             y_hat = self.model(X).cpu().numpy()
-        
-        # Clip the values to be between 0 and 1
-        y_hat = y_hat.clip(0, 1)
 
         return y_hat
     
@@ -79,7 +70,7 @@ class BacktestSatelliteDataset(Dataset):
         end_time: str | None,
         history_mins: int,
         sample_freq_mins: int,
-        nan_to_num: bool = False,
+        channels,
     ):
         """A torch Dataset for loading past and future satellite data
 
@@ -89,20 +80,22 @@ class BacktestSatelliteDataset(Dataset):
             end_time: The satellite data is filtered to exclude timestamps after this
             history_mins: How many minutes of history will be used as input features
             sample_freq_mins: The sample frequency to use for the satellite data
-            nan_to_num: Whether to convert NaNs to -1.
+            channels: The channels the model was trained on, in order, and the constants each one
+                is normalised with. Either a mapping of channel name to constants, or the path of a
+                YAML file holding one
         """
 
         # Load the sat zarr file or list of files and slice the data to the given period
-        self.ds = load_satellite_zarrs(zarr_path).sel(time=slice(start_time, end_time))
+        self.da = open_sat_data(zarr_path).sel(time_utc=slice(start_time, end_time))
 
         # Convert the satellite data to the given time frequency by selection
-        mask = np.mod(self.ds.time.dt.minute, 15) == 0
-        self.ds = self.ds.sel(time=mask)
+        mask = np.mod(self.da.time_utc.dt.minute, 15) == 0
+        self.da = self.da.sel(time_utc=mask)
 
         # Find the valid t0 times for the available data. This avoids trying to take samples where
         # there would be a missing timestamp in the sat data required for the sample
         self.t0_times = self._find_t0_times(
-            pd.DatetimeIndex(self.ds.time), history_mins, sample_freq_mins
+            pd.DatetimeIndex(self.da.time_utc), history_mins, sample_freq_mins
         )
 
         # Only do 30 minute intervals
@@ -110,7 +103,11 @@ class BacktestSatelliteDataset(Dataset):
 
         self.history_mins = history_mins
         self.sample_freq_mins = sample_freq_mins
-        self.nan_to_num = nan_to_num
+        self.channel_config = parse_channel_config(channels)
+        self.normaliser = self.channel_config.normaliser
+
+        # Selected by name so the channels arrive in the order the model was trained to read them
+        self.da = self.da.sel(channel=self.channel_config.names)
 
     @staticmethod
     def _find_t0_times(
@@ -124,22 +121,17 @@ class BacktestSatelliteDataset(Dataset):
         return len(self.t0_times)
 
     def _get_datetime(self, t0: datetime):
-        ds_input = self.ds.sel(time=slice(t0 - timedelta(minutes=self.history_mins), t0))
+        da_input = self.da.sel(time_utc=slice(t0 - timedelta(minutes=self.history_mins), t0))
 
         # Load the data eagerly so that the same chunks aren't loaded multiple times after we split
         # further
-        ds_input = ds_input.compute(scheduler="single-threaded")
+        da_input = da_input.compute()
 
-        # Reshape to (channel, time, height, width)
-        ds_input = ds_input.transpose("variable", "time", "y_geostationary", "x_geostationary")
+        # Convert to an array of per-channel z-scores. The model cannot consume NaNs, so the
+        # missing pixels are filled the same way they are during training
+        X = self.normaliser.fill_missing(self.normaliser.normalise(da_input.values))
 
-        # Convert to arrays
-        X = ds_input.data.values
-
-        if self.nan_to_num:
-            X = np.nan_to_num(X, nan=-1)
-
-        return X.astype(np.float32), t0
+        return X, t0
 
     def __getitem__(self, key: DataIndex):
         if isinstance(key, int):
@@ -189,7 +181,7 @@ def run_backtest(
     da_y_hats = []
     save_batch_num = 0
 
-    attrs_dict = {k:v for k,v in dataset.ds.attrs.items()}
+    attrs_dict = {k:v for k,v in dataset.da.attrs.items()}
     attrs_dict["model_checkpoint"] = model.checkpoint_dir_path
 
     for i, (X, t) in tqdm(enumerate(backtest_dataloader), total=loop_steps):
@@ -200,18 +192,18 @@ def run_backtest(
 
         da_y_hat = xr.DataArray(
             y_hat, 
-            dims=["init_time", "variable", "step", "y_geostationary", "x_geostationary"], 
+            dims=["init_time", "channel", "step", "y_geostationary", "x_geostationary"],
             coords={
                 "init_time": init_times,
-                "variable": dataset.ds.variable,
+                "channel": dataset.da.channel,
                 "step": steps,
-                "y_geostationary": dataset.ds.y_geostationary,
-                "x_geostationary": dataset.ds.x_geostationary,
+                "y_geostationary": dataset.da.y_geostationary,
+                "x_geostationary": dataset.da.x_geostationary,
             }
         ).chunk(
             {
-                "init_time": 1, 
-                "variable":-1,
+                "init_time": 1,
+                "channel":-1,
                 "step":-1, 
                 "y_geostationary": 100, 
                 "x_geostationary": 100,
@@ -263,8 +255,8 @@ if __name__=="__main__":
         end_time=None,
         history_mins=model.history_mins,
         sample_freq_mins=15,
-        nan_to_num=model.data_config['nan_to_num'],
-    )   
+        channels=model.data_config['channels'],
+    )
 
     run_backtest(
         model=model,
