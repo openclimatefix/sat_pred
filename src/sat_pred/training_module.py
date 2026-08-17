@@ -145,6 +145,7 @@ class TrainingModule(pl.LightningModule):
         video_plot_t0_times: list[str] = None,
         video_crop_plots=None,
         multi_gpu: bool = False,
+        restore_optimizer_state: bool = False,
     ):
         """Lightning module to wrap model, optimizer, and training routine
 
@@ -152,19 +153,58 @@ class TrainingModule(pl.LightningModule):
             model: The model to train
             target_loss: The loss to minimize. One of "MAE", "MSE"
             optimizer: The optimizer to use. Defaults to AdamWReduceLROnPlateau().
+            restore_optimizer_state: Whether to carry the optimizer moments over from the
+                checkpoint the weights were loaded from. Only has an effect alongside
+                `model.from_pretrained` - `train.py` finds the checkpoint and sets
+                `optimizer_state_path`, and the moments are loaded in `on_fit_start`
         """
         super().__init__()
-        
+
         assert target_loss in ["MAE", "MSE"] or isinstance(target_loss, LossFunction)
 
         self.model = model
         self._optimizer = optimizer
-    
+
         self.target_loss = target_loss
 
         self.video_plot_t0_times = video_plot_t0_times
         self.video_crop_plots = video_crop_plots
         self.multi_gpu = multi_gpu
+
+        self.restore_optimizer_state = restore_optimizer_state
+        self.optimizer_state_path = None
+
+    def on_fit_start(self):
+        """Load the optimizer moments saved in a checkpoint, if one has been supplied
+
+        The weights are loaded before training starts, but the optimizer does not exist until
+        Lightning has called `configure_optimizers`, so the moments are restored here instead.
+        Without this a continued run rebuilds `exp_avg_sq` from scratch, discarding the
+        per-parameter gradient scaling learned over the whole of the previous run
+        """
+
+        if self.optimizer_state_path is None:
+            return
+
+        if len(self.trainer.optimizers) != 1:
+            raise ValueError(
+                f"Expected a single optimizer to restore state into, found "
+                f"{len(self.trainer.optimizers)}"
+            )
+
+        optimizer = self.trainer.optimizers[0]
+        checkpoint = torch.load(self.optimizer_state_path, map_location="cpu")
+
+        # `load_state_dict` replaces `param_groups` as well as the moments, which would quietly
+        # swap this run's learning rate and weight decay for the ones the checkpointed run used -
+        # and the learning rate in particular is the thing being changed. Only the moments are
+        # wanted, so the configured hyperparameters go back afterwards
+        hyperparameters = [
+            {k: v for k, v in group.items() if k != "params"} for group in optimizer.param_groups
+        ]
+        optimizer.load_state_dict(checkpoint["optimizer_states"][0])
+        for group, saved in zip(optimizer.param_groups, hyperparameters, strict=True):
+            group.update(saved)
 
     def _calculate_common_losses(
         self, 

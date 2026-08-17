@@ -19,7 +19,7 @@ import rich.tree
 from lightning.pytorch.utilities import rank_zero_only
 
 from sat_pred.constants import DATA_CONFIG_NAME, FULL_CONFIG_NAME, MODEL_CONFIG_NAME
-from sat_pred.load_model import get_model_from_checkpoints
+from sat_pred.load_model import get_checkpoint_path, get_model_from_checkpoints
 from sat_pred.loss import LossFunction
 
 
@@ -93,10 +93,14 @@ def train(config: DictConfig):
 
     if config.model.model.get("from_pretrained", False):
 
+        # Held onto because the config they live in is overwritten a few lines below
+        checkpoint_dir = config.model.model.checkpoint_dir
+        val_best = config.model.model.val_best
+
         # Load the model from the checkpoint
         torch_model, model_config, _, _ = get_model_from_checkpoints(
-            config.model.model.checkpoint_dir,
-            val_best=config.model.model.val_best
+            checkpoint_dir,
+            val_best=val_best
         )
 
         # Overwrite the model config with the loaded model config
@@ -107,6 +111,12 @@ def train(config: DictConfig):
 
         # Replace the untrained model with the loaded model
         model.model = torch_model
+
+        # The optimizer moments sit in the same checkpoint file as the weights, but cannot be
+        # loaded until the optimizer exists. Point the module at the file - it restores them itself
+        # once Lightning has built the optimizer
+        if model.restore_optimizer_state:
+            model.optimizer_state_path = get_checkpoint_path(checkpoint_dir, val_best=val_best)
 
     else:
         model: LightningModule = hydra.utils.instantiate(config.model)
