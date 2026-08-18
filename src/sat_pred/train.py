@@ -1,12 +1,7 @@
 """Train the model using parameters in the supplied config files."""
 
-if __name__ == "__main__":
-    import torch.multiprocessing as mp
-    mp.set_start_method("spawn", force=True)
-
 import os
 import hydra
-import torch
 from lightning.pytorch import (
     Callback,
     LightningDataModule,
@@ -23,17 +18,13 @@ import rich.syntax
 import rich.tree
 from lightning.pytorch.utilities import rank_zero_only
 
-from sat_pred.load_model_from_checkpoint import get_model_from_checkpoints
+from sat_pred.constants import DATA_CONFIG_NAME, FULL_CONFIG_NAME, MODEL_CONFIG_NAME
+from sat_pred.load_model import get_checkpoint_path, get_model_from_checkpoints
 from sat_pred.loss import LossFunction
 
-# TODO: is this line needed?
-torch.set_default_dtype(torch.float32)
 
 def resolve_loss_name(loss):
     """Return the desired metric to monitor based on the loss being used.
-
-    The adds the option to use something like:
-        monitor: "${resolve_loss_name:${model.output_quantiles}}"
     """
     
     if isinstance(loss, str):
@@ -46,6 +37,7 @@ def resolve_loss_name(loss):
             raise ValueError(f"Unknown loss type: {type(loss)}")
 
 OmegaConf.register_new_resolver("resolve_loss_name", resolve_loss_name)
+
 
 @rank_zero_only
 def print_config(
@@ -84,10 +76,8 @@ def print_config(
 
     rich.print(tree)
 
-@rank_zero_only
 
-
-@hydra.main(config_path="../configs/", config_name="config.yaml", version_base="1.2")
+@hydra.main(config_path="../../configs/", config_name="config.yaml", version_base="1.2")
 def train(config: DictConfig):
     """Train the model using parameters in the supplied config files.
 
@@ -100,40 +90,45 @@ def train(config: DictConfig):
     # Set seed for random number generators in pytorch, numpy and python.random
     if "seed" in config:
         seed_everything(config.seed, workers=True)
-    
 
     if config.model.model.get("from_pretrained", False):
 
+        # Held onto because the config they live in is overwritten a few lines below
+        checkpoint_dir = config.model.model.checkpoint_dir
+        val_best = config.model.model.val_best
+
         # Load the model from the checkpoint
-        torch_model, model_config, data_config = get_model_from_checkpoints(
-            config.model.model.checkpoint_dir, 
-            val_best=config.model.model.val_best
+        torch_model, model_config, _, _ = get_model_from_checkpoints(
+            checkpoint_dir,
+            val_best=val_best
         )
 
-        # Overwtie the model config with the loaded model config
-        config.model.model = OmegaConf.create(model_config).model
+        # Overwrite the model config with the loaded model config
+        config.model.model = OmegaConf.create(model_config)
 
-        # Create a new lightning wrapped model
+        # Instantiate the LightningModule with the loaded model
         model: LightningModule = hydra.utils.instantiate(config.model)
 
         # Replace the untrained model with the loaded model
         model.model = torch_model
 
+        # The optimizer moments sit in the same checkpoint file as the weights, but cannot be
+        # loaded until the optimizer exists. Point the module at the file - it restores them itself
+        # once Lightning has built the optimizer
+        if model.restore_optimizer_state:
+            model.optimizer_state_path = get_checkpoint_path(checkpoint_dir, val_best=val_best)
 
     else:
-        # Instantiate the model
         model: LightningModule = hydra.utils.instantiate(config.model)
 
     model.multi_gpu = len(config.trainer.devices) > 1
 
-    # Instantiate the loggers
     loggers: list[Logger] = []
     if "logger" in config:
         for _, lg_conf in config.logger.items():
             if "_target_" in lg_conf:
                 loggers.append(hydra.utils.instantiate(lg_conf))
 
-    # Instantiate callbacks
     callbacks: list[Callback] = []
     if "callbacks" in config:
         for _, cb_conf in config.callbacks.items():
@@ -150,12 +145,20 @@ def train(config: DictConfig):
             break
 
     if use_wandb_logger:
+        # Calling the .experiment property initialises the logger
+        wandb_run = wandb_logger.experiment
+
+        # Lightning sends `trainer/global_step` alongside every metric but does not pass a step to
+        # `wandb.log`, so wandb plots against its own `_step`, which counts log calls rather than
+        # optimiser steps. Gradient accumulation and `log_every_n_steps` together mean a whole run
+        # is only a handful of log calls, so the default x-axis reads 0, 1, 2... Pointing every
+        # metric at `trainer/global_step` puts all the panels on the optimiser step instead
+        wandb_run.define_metric("trainer/global_step")
+        wandb_run.define_metric("*", step_metric="trainer/global_step")
+
         for callback in callbacks:
             if isinstance(callback, ModelCheckpoint):
-                # Need to call the .experiment property to initialise the logger
-                wandb_logger.experiment
-
-                #  skip for non-rank-0 processes: 
+                #  skip for non-rank-0 processes:
                 # see https://github.com/Lightning-AI/pytorch-lightning/issues/13166#issuecomment-1139765549
                 if wandb_logger.version is None:
                     break
@@ -165,10 +168,15 @@ def train(config: DictConfig):
                 )
                 # Also save model config to this path
                 os.makedirs(callback.dirpath, exist_ok=True)
-                OmegaConf.save(config.model, f"{callback.dirpath}/model_config.yaml")
+                OmegaConf.save(config.model, f"{callback.dirpath}/{MODEL_CONFIG_NAME}")
 
                 # Similarly save the data config
-                OmegaConf.save(config.datamodule, f"{callback.dirpath}/data_config.yaml")
+                OmegaConf.save(config.datamodule, f"{callback.dirpath}/{DATA_CONFIG_NAME}")
+
+                # Save the full resolved hydra config to this path and upload it to wandb
+                full_config_path = f"{callback.dirpath}/{FULL_CONFIG_NAME}"
+                OmegaConf.save(config, full_config_path, resolve=True)
+                wandb_logger.experiment.save(full_config_path, base_path=callback.dirpath)
 
                 break
 
@@ -177,7 +185,6 @@ def train(config: DictConfig):
     
     datamodule.zarr_path = list(datamodule.zarr_path)
 
-    # Instantiate the trainer
     trainer: Trainer = hydra.utils.instantiate(
         config.trainer,
         logger=loggers,
@@ -185,7 +192,6 @@ def train(config: DictConfig):
         callbacks=callbacks,
     )
 
-    # Train the model
     trainer.fit(model=model, datamodule=datamodule)
     
     

@@ -1,0 +1,19 @@
+name: Pull CI (Python)
+run-name: 'Test PR edit #${{ github.event.number }} "${{ github.event.pull_request.title }}"'
+
+on:
+  pull_request:
+    paths-ignore: ['README.md']
+
+jobs:
+
+  pull-ci:
+    uses: openclimatefix/.github/.github/workflows/branch_ci.yml@main
+    if: ${{ github.event.pull_request.head.repo.fork }}
+    with:
+      enable_linting: true
+      enable_typechecking: true
+      containerfile: 'None'
+      tests_runner: 'pytest'
+      tests_folder: 'tests'
+      test_python_versions: '["3.11", "3.12"]'

@@ -64,4 +64,25 @@ model:
 optimizer:
   _target_: sat_pred.optimizers.AdamWReduceLROnPlateau
   lr: 0.0001
+  weight_decay: 0.01
+  patience: 10
 target_loss: MAE
+video_plot_t0_times:
+  - "2016-07-14 12:15"
+  - "2016-06-30 11:00"
+  - "2016-02-28 10:00"
+  - "2016-09-13 11:00"
+  - "2016-04-25 13:30"
+video_crop_plots:
+  - date: "2016-07-14 12:15"
+    i: 80
+    j: 270
+    s: 50
+  - date: "2016-12-08 09:30"
+    i: 140
+    j: 220
+    s: 50
+  - date: "2016-04-30 13:45"
+    i: 120
+    j: 160
+    s: 30

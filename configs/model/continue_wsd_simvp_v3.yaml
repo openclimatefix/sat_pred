@@ -1,0 +1,46 @@
+_target_: sat_pred.training_module.TrainingModule
+
+# Continues run 9gt3hwb2, which reached MAE/val 0.1649 at epoch 65 but never annealed - its
+# ReduceLROnPlateau needed 10 epochs without a new best to fire and never saw more than 6, so all
+# 66 epochs ran at the initial 5e-4. This run treats those epochs as the stable phase of a
+# warmup-stable-decay schedule and adds the decay they never got.
+#
+# `train.py` replaces the block below with the architecture saved next to the checkpoint, so only
+# `checkpoint_dir` and `val_best` are read from it
+model:
+  from_pretrained: true
+  checkpoint_dir: /home/james/repos/sat_pred/checkpoints/9gt3hwb2
+  val_best: true
+
+# Carries `exp_avg` and `exp_avg_sq` over from the same checkpoint. Without this the run would
+# spend its first ~1000 steps rebuilding the per-parameter gradient scaling that the previous
+# 82,500 steps had already learned
+restore_optimizer_state: true
+
+optimizer:
+  _target_: sat_pred.optimizers.AdamWWSD
+  # Unchanged from the run being continued. It was chosen for an effective batch size of 32, which
+  # is where that run finished and where this one stays throughout
+  lr: 0.0005
+  # The optimizer moments are restored, so this run starts already at the state `lr` was chosen
+  # for and has no cold-start transient to ramp through
+  warmup_epochs: 0
+  # The last 30 of 80 epochs, ~20% of the 146-epoch trajectory once the continued run is counted
+  decay_epochs: 30
+  # Keep equal to `trainer.max_epochs`
+  total_epochs: 80
+  # Decays to 1e-5
+  final_factor: 0.02
+  weight_decay: 0.01
+
+target_loss: MAE
+
+video_plot_t0_times:
+  - "2018-06-08T12:00:00"
+  - "2018-12-26T12:00:00"
+  - "2018-06-14T12:00:00"
+  - "2018-05-08T12:00:00"
+  - "2018-05-12T12:00:00"
+  - "2018-01-29T12:00:00"
+
+video_crop_plots: null
