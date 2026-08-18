@@ -5,7 +5,6 @@ import atexit
 import os
 import shutil
 import tempfile
-from datetime import datetime, timedelta
 from typing import TypedDict
 
 import numpy as np
@@ -25,7 +24,7 @@ from sat_pred.channels import ChannelConfigInput, parse_channel_config
 from sat_pred.xr_tensorstore import open_zarr_paths
 
 
-DataIndex = str | datetime | pd.Timestamp | int
+DataIndex = str | pd.Timestamp | int
 
 # A [start_time, end_time] period which samples are taken from. Either bound can be None to leave
 # that end of the period open
@@ -60,6 +59,11 @@ def open_sat_data(zarr_path: str | list[str]) -> xr.DataArray:
     ds = make_spatial_coords_increasing(ds, x_coord="x_geostationary", y_coord="y_geostationary")
     ds = ds.transpose("channel", "time_utc", "y_geostationary", "x_geostationary")
     da = get_xr_data_array_from_xr_dataset(ds)
+
+    # The area definition which georeferences the images is stored on the dataset rather than on
+    # the variable, so pulling the variable out drops it. It is kept here so that anything written
+    # from this data can carry the geolocation with it
+    da = da.assign_attrs(ds.attrs)
 
     if not np.issubdtype(da.dtype, np.floating):
         raise TypeError(f"Satellite data should be floating, not {da.dtype}")
@@ -214,7 +218,7 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
     def __len__(self) -> int:
         return len(self.t0_times)
 
-    def _get_datetime(self, t0: datetime) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    def _get_datetime(self, t0: np.datetime64) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
 
         da_sel = self.da.sel(time_utc=slice(t0 - self.history_delta, t0 + self.forecast_delta))
 
@@ -237,8 +241,8 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
             t0 = self.t0_times[key]
 
         else:
-            assert isinstance(key, str | datetime | pd.Timestamp)
-            t0 = pd.Timestamp(key)
+            assert isinstance(key, str | np.datetime64 | pd.Timestamp)
+            t0 = np.datetime64(key)
             assert t0 in self.t0_times
 
         return self._get_datetime(t0)
