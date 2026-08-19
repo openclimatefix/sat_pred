@@ -21,6 +21,7 @@ from ocf_data_sampler.load.utils import (
 from ocf_data_sampler.select.find_contiguous_time_periods import find_contiguous_t0_periods
 from ocf_data_sampler.torch_datasets.pvnet_dataset import PickleCacheMixin
 from sat_pred.channels import ChannelConfigInput, parse_channel_config
+from sat_pred.spatial import SpatialGrid
 from sat_pred.xr_tensorstore import open_zarr_paths
 
 
@@ -137,6 +138,7 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
         forecast_mins: int,
         sample_freq_mins: int,
         channels: ChannelConfigInput,
+        spatial_grid: SpatialGrid | None = None,
         preshuffle: bool = False,
         seed: int | None = None,
     ):
@@ -154,6 +156,8 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
                 the constants each one is clipped and z-scored with. Either a mapping of channel
                 name to constants, or the path of a YAML file holding one - see
                 `configs/datamodule/channels/`
+            spatial_grid: The grid a model was trained on, if the samples should be selected onto
+                it. `None` takes whatever area the store holds
             preshuffle (bool): Whether to shuffle the data - useful for validation.
                 Defaults to False.
             seed (int | None): Seed used to shuffle the data if `preshuffle` is True. Set this to
@@ -171,6 +175,11 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
         # Selecting by name puts the channels in the order the config lists them, whatever order
         # the store holds them in, so a model always reads the same channel at the same index
         da = da.sel(channel=self.channel_config.names)
+
+        # Selecting the model's own grid out of the store, so an archive covering a different area
+        # is cropped to what the model was trained on, or refused if it cannot cover it
+        if spatial_grid is not None:
+            da = spatial_grid.select(da)
 
         # Convert the satellite data to the given time frequency by selection
         mask = np.mod(da.time_utc.dt.minute, sample_freq_mins) == 0
@@ -197,6 +206,11 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
         self.normaliser = self.channel_config.normaliser
         self.da = da
         self.t0_times = t0_times
+
+    @property
+    def spatial_grid(self) -> SpatialGrid:
+        """The grid the samples are taken from"""
+        return SpatialGrid.from_dataarray(self.da)
 
     def __setstate__(self, state: dict) -> None:
         """Rebuild a dataset sent to a dataloader worker
@@ -342,6 +356,11 @@ class SatelliteDataModule(LightningDataModule):
 
         # Parsed once here so a bad config fails before any data is loaded
         self.channel_config = parse_channel_config(channels)
+
+    @property
+    def spatial_grid(self) -> SpatialGrid:
+        """The grid the training samples are taken from"""
+        return self._get_dataset("train").spatial_grid
 
     def _make_dataset(
         self, time_periods: list[TimePeriod], preshuffle: bool = False

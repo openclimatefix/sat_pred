@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from sat_pred.dataset import SatelliteDataModule, SatelliteDataset, find_valid_t0_times
+from sat_pred.spatial import SpatialGrid
 from tests.conftest import (
     CHANNELS_PATH,
     DATA_FREQ_MINS,
@@ -136,6 +137,28 @@ def test_a_channel_the_data_does_not_have_is_an_error(sat_zarr_path, channel_con
             sample_freq_mins=DATA_FREQ_MINS,
             channels=channels,
         )
+
+
+def test_a_dataset_can_be_selected_onto_a_grid(sat_zarr_path):
+    """Samples are cropped to the grid given, and the dataset reports the grid it is on
+
+    Recording the grid at training and selecting onto it at inference only line up if these two
+    are inverses of each other.
+    """
+    full_dataset = make_dataset(sat_zarr_path, [PERIOD_1])
+
+    grid = SpatialGrid(
+        x_geostationary=full_dataset.da.x_geostationary.values[2:10],
+        y_geostationary=full_dataset.da.y_geostationary.values[3:12],
+    )
+
+    dataset = make_dataset(sat_zarr_path, [PERIOD_1], spatial_grid=grid)
+
+    np.testing.assert_array_equal(dataset.spatial_grid.x_geostationary, grid.x_geostationary)
+    np.testing.assert_array_equal(dataset.spatial_grid.y_geostationary, grid.y_geostationary)
+
+    X, _ = dataset[0]
+    assert X.shape == (NUM_CHANNELS, NUM_HISTORY_STEPS, 9, 8)
 
 
 def test_samples_are_normalised(sat_zarr_path, channel_config):
