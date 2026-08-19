@@ -118,7 +118,7 @@ def train(config: DictConfig):
         val_best = config.model.model.val_best
 
         # Load the model from the checkpoint
-        torch_model, model_config, _, _ = get_model_from_checkpoints(
+        torch_model, model_config, *_ = get_model_from_checkpoints(
             checkpoint_dir,
             val_best=val_best
         )

@@ -61,7 +61,7 @@ def get_checkpoint_path(checkpoint_dir_path: str, val_best: bool = True) -> str:
 def get_model_from_checkpoints(
     checkpoint_dir_path: str,
     val_best: bool = True,
-) -> tuple[torch.nn.Module, dict, dict, str]:
+) -> tuple[torch.nn.Module, dict, dict, SpatialGrid, str]:
     """Load a model from its checkpoint directory
 
     Args:
@@ -74,6 +74,7 @@ def get_model_from_checkpoints(
             model: The trained torch model, with the lightning wrapper discarded
             model_config: The config of the torch model
             data_config: The config of the data the model was trained on
+            spatial_grid: The grid the model was trained on
             experiment_config_path: Path to the full hydra config of the training run. This is
                 None for models trained before these configs were saved
     """
@@ -96,9 +97,11 @@ def get_model_from_checkpoints(
 
     data_config = _read_yaml_config(f"{checkpoint_dir_path}/{DATA_CONFIG_NAME}")
 
+    spatial_grid = SpatialGrid.load(f"{checkpoint_dir_path}/{SPATIAL_GRID_NAME}")
+
     experiment_config_path = f"{checkpoint_dir_path}/{FULL_CONFIG_NAME}"
 
-    return model, model_config, data_config, experiment_config_path
+    return model, model_config, data_config, spatial_grid, experiment_config_path
 
 
 def get_model_from_huggingface(

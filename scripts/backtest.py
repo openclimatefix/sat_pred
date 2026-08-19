@@ -43,6 +43,7 @@ from sat_pred.channels import TorchChannelNormaliser, parse_channel_config
 from sat_pred.dataset import SatelliteDataset, TimePeriod
 from sat_pred.load_model import get_model_from_checkpoints, get_model_from_huggingface
 from sat_pred.predictions import PREDICTION_DIMS, PREDICTION_VAR_NAME, prediction_coords
+from sat_pred.spatial import SpatialGrid
 
 
 
@@ -82,6 +83,7 @@ class MLModel:
         self,
         model: torch.nn.Module,
         data_config: dict,
+        spatial_grid: SpatialGrid,
         model_address: str,
         device: torch.device,
     ) -> None:
@@ -90,6 +92,8 @@ class MLModel:
         Args:
             model: The trained torch model
             data_config: The config of the data the model was trained on
+            spatial_grid: The grid the model was trained on, for the dataset to select its
+                inputs onto
             model_address: Where the model was loaded from. Saved onto the predictions, so a store
                 records which model made it
             device: The torch device to run the model on
@@ -105,6 +109,7 @@ class MLModel:
         self.model = model.to(device).eval()
         self.device = device
         self.model_address = model_address
+        self.spatial_grid = spatial_grid
 
         # The shape of the samples the model was trained on. These are unpacked from the data
         # config rather than the model config so the backtest samples are built exactly the way the
@@ -126,8 +131,10 @@ class MLModel:
             checkpoint_dir_path: Path of the checkpoint directory
             device: The torch device to run the model on
         """
-        model, _, data_config, _ = get_model_from_checkpoints(checkpoint_dir_path, val_best=True)
-        return cls(model, data_config, checkpoint_dir_path, device)
+        model, _, data_config, spatial_grid, _ = get_model_from_checkpoints(
+            checkpoint_dir_path, val_best=True
+        )
+        return cls(model, data_config, spatial_grid, checkpoint_dir_path, device)
 
     @classmethod
     def from_huggingface(cls, repo_id: str, revision: str, device: torch.device) -> "MLModel":
@@ -142,8 +149,8 @@ class MLModel:
             revision: The commit hash of the model to download
             device: The torch device to run the model on
         """
-        model, data_config = get_model_from_huggingface(repo_id, revision)
-        return cls(model, data_config, f"{repo_id}@{revision}", device)
+        model, data_config, spatial_grid = get_model_from_huggingface(repo_id, revision)
+        return cls(model, data_config, spatial_grid, f"{repo_id}@{revision}", device)
 
     @torch.no_grad()
     def __call__(self, X: torch.Tensor) -> torch.Tensor:
@@ -267,6 +274,7 @@ class BacktestSatelliteDataset(SatelliteDataset):
         history_mins: int,
         sample_freq_mins: int,
         channels,
+        spatial_grid: SpatialGrid,
     ):
         """A torch Dataset for loading model inputs and the init-time they are a forecast from
 
@@ -279,6 +287,7 @@ class BacktestSatelliteDataset(SatelliteDataset):
             channels: The channels the model was trained on, in order, and the constants each one
                 is normalised with. Either a mapping of channel name to constants, or the path of a
                 YAML file holding one
+            spatial_grid: The grid the model was trained on, which the samples are selected onto
         """
 
         # No target is loaded - the backtest only makes predictions, it does not score them
@@ -289,6 +298,7 @@ class BacktestSatelliteDataset(SatelliteDataset):
             forecast_mins=0,
             sample_freq_mins=sample_freq_mins,
             channels=channels,
+            spatial_grid=spatial_grid,
         )
 
         # Only forecast on the half hour
@@ -520,6 +530,7 @@ def backtest(
         history_mins=model.history_mins,
         sample_freq_mins=model.sample_freq_mins,
         channels=model.channels,
+        spatial_grid=model.spatial_grid,
     )
 
     # Without this the run would quietly do nothing and write no store at all, which is easy to

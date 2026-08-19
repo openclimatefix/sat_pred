@@ -53,6 +53,13 @@ CHANNEL_NAMES = [
     "IR_134", "VIS006", "VIS008", "WV_062", "WV_073",
 ]
 
+# The grid of the synthetic stores, with `x_geostationary` ascending as `open_sat_data` leaves it
+# rather than descending as the stores hold it
+SPATIAL_GRID = SpatialGrid(
+    x_geostationary=np.sort(np.arange(IMAGE_SIZE, dtype=np.float64) * -3000),
+    y_geostationary=np.arange(IMAGE_SIZE, dtype=np.float64) * 3000,
+)
+
 AREA_STRING = json.dumps(
     {
         "msg_seviri_rss_3km": {
@@ -226,6 +233,8 @@ def checkpoint_dir(tmp_path, training_module_config) -> str:
         yaml.dump({"seed": 12345, "model": training_module_config})
     )
 
+    SPATIAL_GRID.save(tmp_path / SPATIAL_GRID_NAME)
+
     torch.save({"state_dict": training_module.state_dict()}, tmp_path / "epoch=1-step=10.ckpt")
 
     return str(tmp_path)
@@ -248,11 +257,6 @@ def huggingface_dir(tmp_path, tiny_model_config) -> str:
 
     save_model_as_safetensor(model, str(tmp_path / PYTORCH_WEIGHTS_NAME))
 
-    # The grid of the synthetic stores, with `x_geostationary` ascending as `open_sat_data` leaves
-    # it rather than descending as the stores hold it
-    SpatialGrid(
-        x_geostationary=np.sort(np.arange(IMAGE_SIZE, dtype=np.float64) * -3000),
-        y_geostationary=np.arange(IMAGE_SIZE, dtype=np.float64) * 3000,
-    ).save(tmp_path / SPATIAL_GRID_NAME)
+    SPATIAL_GRID.save(tmp_path / SPATIAL_GRID_NAME)
 
     return str(tmp_path)

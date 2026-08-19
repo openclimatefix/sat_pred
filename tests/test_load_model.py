@@ -20,8 +20,8 @@ HF_REVISION = "8b1a9953c4611296a827abf8c47804d7"
 
 def test_get_model_from_checkpoints(checkpoint_dir, tiny_model_config):
     """A saved checkpoint round-trips back to a model and its configs"""
-    model, model_config, data_config, experiment_config_path = get_model_from_checkpoints(
-        checkpoint_dir
+    model, model_config, data_config, spatial_grid, experiment_config_path = (
+        get_model_from_checkpoints(checkpoint_dir)
     )
 
     # The lightning wrapper is discarded, leaving the torch model
@@ -33,6 +33,7 @@ def test_get_model_from_checkpoints(checkpoint_dir, tiny_model_config):
     assert model_config == tiny_model_config
 
     assert data_config["history_mins"] > 0
+    assert len(spatial_grid.x_geostationary) == IMAGE_SIZE
     assert experiment_config_path == f"{checkpoint_dir}/{FULL_CONFIG_NAME}"
 
 

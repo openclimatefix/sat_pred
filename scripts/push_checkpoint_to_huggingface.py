@@ -26,6 +26,7 @@ from sat_pred.constants import (
     SPATIAL_GRID_NAME,
 )
 from sat_pred.load_model import get_model_from_checkpoints
+from sat_pred.spatial import SpatialGrid
 
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def save_model_to_huggingface(
     save_directory: str,
     model_config: dict,
     data_config: dict,
-    spatial_grid_path: str,
+    spatial_grid: SpatialGrid,
     wandb_repo: str,
     wandb_id: str,
     experiment_config_path: str | None = None,
@@ -67,8 +68,8 @@ def save_model_to_huggingface(
             Model configuration specified as a key/value dictionary.
         data_config:
             Data configuration the model was trained with, specified as a key/value dictionary.
-        spatial_grid_path:
-            Path to the grid the model was trained on.
+        spatial_grid:
+            The grid the model was trained on.
         wandb_repo: Identifier of the repo on wandb.
         wandb_id: Identifier of the model on wandb.
         experiment_config_path: Path to the full hydra config of the training run, if it was saved.
@@ -96,9 +97,8 @@ def save_model_to_huggingface(
 
     # Save the grid the model was trained on. Unlike the experiment config below this is not
     # optional - without it nothing downstream can check that an input covers the area the model
-    # was trained on. A checkpoint from before the grid was recorded raises here, and needs the
-    # grid backfilling into it before it can be pushed
-    shutil.copyfile(spatial_grid_path, save_directory / SPATIAL_GRID_NAME)
+    # was trained on
+    spatial_grid.save(save_directory / SPATIAL_GRID_NAME)
 
     # Save the full config of the training run, if it was saved with the checkpoint
     if experiment_config_path is not None:
@@ -178,9 +178,8 @@ def push_to_huggingface(
         raise ValueError(f"Could not find wandb run '{wandb_id}' within {wandb_repo}")
 
     # Load the model
-    model, model_config, data_config, experiment_config_path = get_model_from_checkpoints(
-        checkpoint_dir_path,
-        val_best=val_best
+    model, model_config, data_config, spatial_grid, experiment_config_path = (
+        get_model_from_checkpoints(checkpoint_dir_path, val_best=val_best)
     )
 
     # Push to hub
@@ -195,7 +194,7 @@ def push_to_huggingface(
         save_directory=model_output_dir,
         model_config=model_config,
         data_config=data_config,
-        spatial_grid_path=f"{checkpoint_dir_path}/{SPATIAL_GRID_NAME}",
+        spatial_grid=spatial_grid,
         experiment_config_path=experiment_config_path,
         wandb_repo=wandb_repo,
         wandb_id=wandb_id,
