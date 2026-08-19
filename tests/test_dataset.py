@@ -93,7 +93,7 @@ def test_dataset_indexing_by_datetime(sat_zarr_path):
     np.testing.assert_array_equal(y_int, y_datetime)
 
     # A t0 which isn't valid for this dataset is rejected
-    with pytest.raises(AssertionError):
+    with pytest.raises(KeyError, match="not a valid init-time"):
         dataset[GAP_START]
 
 

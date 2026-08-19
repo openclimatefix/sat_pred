@@ -243,7 +243,12 @@ class SatelliteDataset(PickleCacheMixin, Dataset[tuple[NDArray[np.float32], NDAr
         else:
             assert isinstance(key, str | np.datetime64 | pd.Timestamp)
             t0 = np.datetime64(key)
-            assert t0 in self.t0_times
+            if t0 not in self.t0_times:
+                raise KeyError(
+                    f"{t0} is not a valid init-time for this dataset. Either it falls outside the "
+                    "time periods the dataset covers, or the satellite data is missing one of the "
+                    "timestamps the sample would span."
+                )
 
         return self._get_datetime(t0)
 

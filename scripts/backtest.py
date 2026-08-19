@@ -41,7 +41,7 @@ import zarr
 
 from sat_pred.channels import TorchChannelNormaliser, parse_channel_config
 from sat_pred.dataset import SatelliteDataset, TimePeriod
-from sat_pred.load_model import get_model_from_checkpoints
+from sat_pred.load_model import get_model_from_checkpoints, get_model_from_huggingface
 from sat_pred.predictions import PREDICTION_DIMS, PREDICTION_VAR_NAME, prediction_coords
 
 
@@ -72,22 +72,39 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 class MLModel:
-    """A trained model, and the sample shape it was trained on, loaded from a checkpoint"""
+    """A trained model, and the sample shape it was trained on
 
-    def __init__(self, checkpoint_dir_path: str, device: torch.device) -> None:
-        """Load a trained model from its checkpoint directory
+    Use `from_checkpoint` or `from_huggingface` rather than the constructor - the two sources hold
+    the model differently, and everything past loading it is the same.
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        data_config: dict,
+        model_address: str,
+        device: torch.device,
+    ) -> None:
+        """Set a loaded model up to predict on a device
 
         Args:
-            checkpoint_dir_path: Path of the checkpoint directory
+            model: The trained torch model
+            data_config: The config of the data the model was trained on
+            model_address: Where the model was loaded from. Saved onto the predictions, so a store
+                records which model made it
             device: The torch device to run the model on
         """
 
-        model, _, data_config, _ = get_model_from_checkpoints(checkpoint_dir_path, val_best=True)
+        # Production runs on the CPU in true float32. TF32 would run the GPU convolutions at a
+        # 10-bit mantissa instead, so a backtest and the production forecast for the same init-time
+        # would not agree
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
 
         # `.eval()` because a freshly instantiated module is in train mode
         self.model = model.to(device).eval()
         self.device = device
-        self.checkpoint_dir_path = checkpoint_dir_path
+        self.model_address = model_address
 
         # The shape of the samples the model was trained on. These are unpacked from the data
         # config rather than the model config so the backtest samples are built exactly the way the
@@ -100,6 +117,33 @@ class MLModel:
         self.normaliser = TorchChannelNormaliser(
             parse_channel_config(self.channels).normaliser, device
         )
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint_dir_path: str, device: torch.device) -> "MLModel":
+        """Load a model from a checkpoint directory written by training
+
+        Args:
+            checkpoint_dir_path: Path of the checkpoint directory
+            device: The torch device to run the model on
+        """
+        model, _, data_config, _ = get_model_from_checkpoints(checkpoint_dir_path, val_best=True)
+        return cls(model, data_config, checkpoint_dir_path, device)
+
+    @classmethod
+    def from_huggingface(cls, repo_id: str, revision: str, device: torch.device) -> "MLModel":
+        """Load a model from a huggingface model repo
+
+        This is how the model production runs is backtested. The address is written in the same
+        `repo@revision` form the inference app writes, so the two stores name the same model the
+        same way.
+
+        Args:
+            repo_id: The huggingface model repo, e.g. "openclimatefix-models/cloudcasting_uk"
+            revision: The commit hash of the model to download
+            device: The torch device to run the model on
+        """
+        model, data_config = get_model_from_huggingface(repo_id, revision)
+        return cls(model, data_config, f"{repo_id}@{revision}", device)
 
     @torch.no_grad()
     def __call__(self, X: torch.Tensor) -> torch.Tensor:
@@ -371,7 +415,7 @@ def run_backtest(
     attrs_dict = dict(dataset.da.attrs)
     # Named to match what the inference app writes. Backtest stores made before this called it
     # `model_checkpoint`
-    attrs_dict["model_address"] = model.checkpoint_dir_path
+    attrs_dict["model_address"] = model.model_address
     prediction_store = create_prediction_store(
         output_zarr_path,
         init_times=dataset.t0_times,
@@ -417,7 +461,9 @@ def run_backtest(
 def backtest(
     input_data_paths: str = typer.Option(..., "--input-data-paths"),
     output_zarr_path: str = typer.Option(..., "--output-zarr-path"),
-    checkpoint: str = typer.Option(..., "--checkpoint"),
+    checkpoint: str = typer.Option(None, "--checkpoint"),
+    huggingface_repo: str = typer.Option(None, "--huggingface-repo"),
+    revision: str = typer.Option(None, "--revision"),
     start_datetime: str = typer.Option(..., "--start-datetime"),
     end_datetime: str = typer.Option(..., "--end-datetime"),
     device_name: str = typer.Option(..., "--device-name"),
@@ -425,13 +471,20 @@ def backtest(
     batch_size: int = typer.Option(..., "--batch-size"),
     dataset_pickle_dir: str = typer.Option(None, "--dataset-pickle-dir"),
 ) -> None:
-    """Run a backtest of the model checkpoint and save the predictions to zarr
+    """Run a backtest of a trained model and save the predictions to zarr
+
+    The model comes either from a local checkpoint directory or from huggingface. Give exactly one
+    of `--checkpoint` and `--huggingface-repo`.
 
     Args:
         input_data_paths: Path of the YAML file holding the satellite zarr paths. See
             example_backtest_data_config.yaml for the expected format
         output_zarr_path: Path of the zarr store to save the predictions to
         checkpoint: Path of the checkpoint directory to run the backtest for
+        huggingface_repo: The huggingface model repo to run the backtest for, e.g.
+            "openclimatefix-models/cloudcasting_uk"
+        revision: The commit hash of the huggingface model to run the backtest for. Required with
+            `--huggingface-repo`
         start_datetime: The first init-time predicted for. The history the prediction is made from
             is read from the satellite data before this time
         end_datetime: Init-times from this time onwards are not predicted for
@@ -447,7 +500,19 @@ def backtest(
     if os.path.exists(output_zarr_path):
         raise FileExistsError(f"There is already something saved at {output_zarr_path}")
 
-    model = MLModel(checkpoint, torch.device(device_name))
+    device = torch.device(device_name)
+
+    if (checkpoint is None) == (huggingface_repo is None):
+        raise ValueError("Give exactly one of --checkpoint and --huggingface-repo")
+
+    if checkpoint is not None:
+        model = MLModel.from_checkpoint(checkpoint, device)
+    else:
+        # Not defaulted to a branch - a branch moves, and then the store no longer records which
+        # model actually made the predictions
+        if revision is None:
+            raise ValueError("--revision is required with --huggingface-repo")
+        model = MLModel.from_huggingface(huggingface_repo, revision, device)
 
     dataset = BacktestSatelliteDataset(
         zarr_path=get_satellite_paths(input_data_paths),
