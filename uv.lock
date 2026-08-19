@@ -2565,7 +2565,7 @@ requires-dist = [
     { name = "safetensors" },
     { name = "scikit-image" },
     { name = "tensorstore" },
-    { name = "torch" },
+    { name = "torch", specifier = "==2.13.0" },
     { name = "tqdm" },
     { name = "typer" },
     { name = "wandb", extras = ["media"] },

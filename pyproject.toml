@@ -18,7 +18,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
-    "torch",
+    # torch changes its conv kernels and default algorithm selection between releases, so this pin
+    # is required for full reproducibility in trained models. This pin also locks the version used
+    # in the inference app
+    "torch==2.13.0",
     "lightning",
     "numpy",
     "pandas",
