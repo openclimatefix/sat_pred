@@ -2,6 +2,7 @@
 
 import os
 import hydra
+from pathlib import Path
 from lightning.pytorch import (
     Callback,
     LightningDataModule,
@@ -18,7 +19,12 @@ import rich.syntax
 import rich.tree
 from lightning.pytorch.utilities import rank_zero_only
 
-from sat_pred.constants import DATA_CONFIG_NAME, FULL_CONFIG_NAME, MODEL_CONFIG_NAME
+from sat_pred.constants import (
+    DATA_CONFIG_NAME,
+    FULL_CONFIG_NAME,
+    MODEL_CONFIG_NAME,
+    SPATIAL_GRID_NAME,
+)
 from sat_pred.load_model import get_checkpoint_path, get_model_from_checkpoints
 from sat_pred.loss import LossFunction
 
@@ -135,16 +141,14 @@ def train(config: DictConfig):
             if "_target_" in cb_conf:
                 callbacks.append(hydra.utils.instantiate(cb_conf))
 
+    # Instantiate the datamodule
+    datamodule: LightningDataModule = hydra.utils.instantiate(config.datamodule, _convert_='all')
+
     # Align the wandb id with the checkpoint path
     # - only works if wandb logger and model checkpoint used
-    use_wandb_logger = False
-    for logger in loggers:
-        if isinstance(logger, WandbLogger):
-            use_wandb_logger = True
-            wandb_logger = logger
-            break
+    wandb_logger = next((lg for lg in loggers if isinstance(lg, WandbLogger)), None)
 
-    if use_wandb_logger:
+    if wandb_logger is not None:
         # Calling the .experiment property initialises the logger
         wandb_run = wandb_logger.experiment
 
@@ -156,34 +160,35 @@ def train(config: DictConfig):
         wandb_run.define_metric("trainer/global_step")
         wandb_run.define_metric("*", step_metric="trainer/global_step")
 
-        for callback in callbacks:
-            if isinstance(callback, ModelCheckpoint):
-                #  skip for non-rank-0 processes:
-                # see https://github.com/Lightning-AI/pytorch-lightning/issues/13166#issuecomment-1139765549
-                if wandb_logger.version is None:
-                    break
+        checkpoint_callback = next(
+            (cb for cb in callbacks if isinstance(cb, ModelCheckpoint)), None
+        )
 
-                callback.dirpath = "/".join(
-                    callback.dirpath.split("/")[:-1] + [wandb_logger.version]
-                )
-                # Also save model config to this path
-                os.makedirs(callback.dirpath, exist_ok=True)
-                OmegaConf.save(config.model, f"{callback.dirpath}/{MODEL_CONFIG_NAME}")
+        # A version of None means a non-rank-0 process, which must not write any of this:
+        # see https://github.com/Lightning-AI/pytorch-lightning/issues/13166#issuecomment-1139765549
+        if checkpoint_callback is not None and wandb_logger.version is not None:
 
-                # Similarly save the data config
-                OmegaConf.save(config.datamodule, f"{callback.dirpath}/{DATA_CONFIG_NAME}")
+            dirpath = str(Path(checkpoint_callback.dirpath).with_name(wandb_logger.version))
 
-                # Save the full resolved hydra config to this path and upload it to wandb
-                full_config_path = f"{callback.dirpath}/{FULL_CONFIG_NAME}"
-                OmegaConf.save(config, full_config_path, resolve=True)
-                wandb_logger.experiment.save(full_config_path, base_path=callback.dirpath)
+            checkpoint_callback.dirpath = dirpath
 
-                break
+            # Also save model config to this path
+            os.makedirs(dirpath, exist_ok=True)
+            OmegaConf.save(config.model, f"{dirpath}/{MODEL_CONFIG_NAME}")
 
-    # Instantiate the datamodule
-    datamodule: LightningDataModule = hydra.utils.instantiate(config.datamodule, _convert_='all')
-    
-    datamodule.zarr_path = list(datamodule.zarr_path)
+            # Similarly save the data config
+            OmegaConf.save(config.datamodule, f"{dirpath}/{DATA_CONFIG_NAME}")
+
+            # And the grid the model is about to be trained on, which the data config does not
+            # record. Saved now rather than when the model is pushed, because the zarr paths could
+            # have gone stale by then. This builds the train dataset, so the valid-t0 search
+            # happens here instead of in `fit` - it is cached, so `fit` reuses it
+            datamodule.spatial_grid.save(f"{dirpath}/{SPATIAL_GRID_NAME}")
+
+            # Save the full resolved hydra config to this path and upload it to wandb
+            full_config_path = f"{dirpath}/{FULL_CONFIG_NAME}"
+            OmegaConf.save(config, full_config_path, resolve=True)
+            wandb_logger.experiment.save(full_config_path, base_path=dirpath)
 
     trainer: Trainer = hydra.utils.instantiate(
         config.trainer,
