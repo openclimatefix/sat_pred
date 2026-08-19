@@ -42,6 +42,7 @@ import zarr
 from sat_pred.channels import TorchChannelNormaliser, parse_channel_config
 from sat_pred.dataset import SatelliteDataset, TimePeriod
 from sat_pred.load_model import get_model_from_checkpoints
+from sat_pred.predictions import PREDICTION_DIMS, PREDICTION_VAR_NAME, prediction_coords
 
 
 
@@ -284,13 +285,16 @@ def create_prediction_store(
     Args:
         output_zarr_path: Path of the zarr store to create
         init_times: Every init-time which will be predicted for, in the order they are written
-        coords: The coordinates shared by every prediction - the channels, steps, and the two
-            spatial coordinates, in the order they are stored
+        coords: The coordinates shared by every prediction - see `prediction_coords`
         attrs: Attributes to store on the output dataset
 
     Returns:
         The store's data variable, opened for writing
     """
+
+    # Ordered by `PREDICTION_DIMS` rather than however the caller happened to build them, so a
+    # store is laid out the same way whichever of the two pathways wrote it
+    coords = {name: coords[name] for name in PREDICTION_DIMS[1:]}
 
     shape = (len(init_times), *(len(values) for values in coords.values()))
 
@@ -298,9 +302,9 @@ def create_prediction_store(
     # predictions themselves unwritten
     template = xr.DataArray(
         dask.array.zeros(shape, dtype=np.float16, chunks=(1, *shape[1:])),
-        dims=["init_time_utc", *coords],
+        dims=PREDICTION_DIMS,
         coords={"init_time_utc": init_times, **coords},
-    ).to_dataset(name="sat_pred")
+    ).to_dataset(name=PREDICTION_VAR_NAME)
     template.attrs.update(attrs)
 
     encoding = create_zarr_encoding(
@@ -314,7 +318,10 @@ def create_prediction_store(
     return ts.open(
         {
             "driver": "zarr3",
-            "kvstore": {"driver": "file", "path": os.path.join(output_zarr_path, "sat_pred")},
+            "kvstore": {
+                "driver": "file",
+                "path": os.path.join(output_zarr_path, PREDICTION_VAR_NAME),
+            },
         },
         write=True,
         read=False,
@@ -362,21 +369,17 @@ def run_backtest(
     )
 
     attrs_dict = dict(dataset.da.attrs)
-    attrs_dict["model_checkpoint"] = model.checkpoint_dir_path
-    steps = pd.timedelta_range(
-        start=f"{model.sample_freq_mins}min",
-        end=f"{model.forecast_mins}min",
-        freq=f"{model.sample_freq_mins}min",
-    )
+    # Named to match what the inference app writes. Backtest stores made before this called it
+    # `model_checkpoint`
+    attrs_dict["model_address"] = model.checkpoint_dir_path
     prediction_store = create_prediction_store(
         output_zarr_path,
         init_times=dataset.t0_times,
-        coords={
-            "channel": dataset.da.channel.values,
-            "step": steps,
-            "y_geostationary": dataset.da.y_geostationary.values,
-            "x_geostationary": dataset.da.x_geostationary.values,
-        },
+        coords=prediction_coords(
+            dataset.da,
+            forecast_mins=model.forecast_mins,
+            sample_freq_mins=model.sample_freq_mins,
+        ),
         attrs=attrs_dict,
     )
 
