@@ -68,10 +68,11 @@ def print_config(
     """
 
     style = "dim"
-    tree = rich.tree.Tree("CONFIG", style=style, guide_style=style)
+    style_kwargs = {"style": style, "guide_style": style}
+    tree = rich.tree.Tree("CONFIG", **style_kwargs)
 
     for field in fields:
-        branch = tree.add(field, style=style, guide_style=style)
+        branch = tree.add(field, **style_kwargs)
 
         config_section = config.get(field)
         branch_content = str(config_section)
@@ -81,6 +82,19 @@ def print_config(
         branch.add(rich.syntax.Syntax(branch_content, "yaml"))
 
     rich.print(tree)
+
+
+def get_next_instance(sequence, class_type) -> object | None:
+    """Get the next instance of a class in a sequence, or None if there is none.
+
+    Args:
+        sequence: A sequence of objects to search through.
+        class_type: The class type to look for.
+    """
+    for item in sequence:
+        if isinstance(item, class_type):
+            return item
+    return None
 
 
 @hydra.main(config_path="../../configs/", config_name="config.yaml", version_base="1.2")
@@ -146,7 +160,7 @@ def train(config: DictConfig):
 
     # Align the wandb id with the checkpoint path
     # - only works if wandb logger and model checkpoint used
-    wandb_logger = next((lg for lg in loggers if isinstance(lg, WandbLogger)), None)
+    wandb_logger = get_next_instance(loggers, WandbLogger)
 
     if wandb_logger is not None:
         # Calling the .experiment property initialises the logger
@@ -160,20 +174,19 @@ def train(config: DictConfig):
         wandb_run.define_metric("trainer/global_step")
         wandb_run.define_metric("*", step_metric="trainer/global_step")
 
-        checkpoint_callback = next(
-            (cb for cb in callbacks if isinstance(cb, ModelCheckpoint)), None
-        )
+        checkpoint_callback = get_next_instance(callbacks, ModelCheckpoint)
 
         # A version of None means a non-rank-0 process, which must not write any of this:
         # see https://github.com/Lightning-AI/pytorch-lightning/issues/13166#issuecomment-1139765549
         if checkpoint_callback is not None and wandb_logger.version is not None:
 
             dirpath = str(Path(checkpoint_callback.dirpath).with_name(wandb_logger.version))
+            os.makedirs(dirpath, exist_ok=True)
 
+            # Set the checkpoint callback so it writes to this path
             checkpoint_callback.dirpath = dirpath
 
             # Also save model config to this path
-            os.makedirs(dirpath, exist_ok=True)
             OmegaConf.save(config.model, f"{dirpath}/{MODEL_CONFIG_NAME}")
 
             # Similarly save the data config
