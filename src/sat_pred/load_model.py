@@ -10,7 +10,6 @@ Both loaders return the model in whatever mode hydra instantiated it. Callers mo
 device and call `.eval()` themselves.
 """
 
-import os
 from glob import glob
 
 import hydra
@@ -24,7 +23,9 @@ from sat_pred.constants import (
     FULL_CONFIG_NAME,
     MODEL_CONFIG_NAME,
     PYTORCH_WEIGHTS_NAME,
+    SPATIAL_GRID_NAME,
 )
+from sat_pred.spatial import SpatialGrid
 
 
 def _read_yaml_config(path: str) -> dict:
@@ -103,7 +104,7 @@ def get_model_from_checkpoints(
 def get_model_from_huggingface(
     repo_id: str,
     revision: str,
-) -> tuple[torch.nn.Module, dict]:
+) -> tuple[torch.nn.Module, dict, SpatialGrid]:
     """Load a model from a huggingface model repo
 
     The repo holds what `scripts/push_checkpoint_to_huggingface.py` pushed. Note that its
@@ -125,6 +126,8 @@ def get_model_from_huggingface(
             data_config: The config of the data the model was trained on. This gives the history,
                 forecast horizon, time resolution and channels the model expects, so the inputs
                 built for it always match what it was trained to read
+            spatial_grid: The grid the model was trained on, for the caller to select its inputs
+                onto
     """
 
     download_dir = snapshot_download(repo_id=repo_id, revision=revision)
@@ -141,4 +144,6 @@ def get_model_from_huggingface(
 
     data_config = _read_yaml_config(f"{download_dir}/{DATA_CONFIG_NAME}")
 
-    return model, data_config
+    spatial_grid = SpatialGrid.load(f"{download_dir}/{SPATIAL_GRID_NAME}")
+
+    return model, data_config, spatial_grid

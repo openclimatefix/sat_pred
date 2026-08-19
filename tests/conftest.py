@@ -22,7 +22,9 @@ from sat_pred.constants import (
     FULL_CONFIG_NAME,
     MODEL_CONFIG_NAME,
     PYTORCH_WEIGHTS_NAME,
+    SPATIAL_GRID_NAME,
 )
+from sat_pred.spatial import SpatialGrid
 
 # The channel config the training configs use
 CHANNELS_PATH = Path(__file__).parents[1] / "configs/datamodule/channels/seviri_rss.yaml"
@@ -245,5 +247,12 @@ def huggingface_dir(tmp_path, tiny_model_config) -> str:
     )
 
     save_model_as_safetensor(model, str(tmp_path / PYTORCH_WEIGHTS_NAME))
+
+    # The grid of the synthetic stores, with `x_geostationary` ascending as `open_sat_data` leaves
+    # it rather than descending as the stores hold it
+    SpatialGrid(
+        x_geostationary=np.sort(np.arange(IMAGE_SIZE, dtype=np.float64) * -3000),
+        y_geostationary=np.arange(IMAGE_SIZE, dtype=np.float64) * 3000,
+    ).save(tmp_path / SPATIAL_GRID_NAME)
 
     return str(tmp_path)

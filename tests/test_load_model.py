@@ -11,7 +11,7 @@ from sat_pred.load_model import get_model_from_checkpoints, get_model_from_huggi
 from sat_pred.models.simvp_model import SimVP
 from sat_pred.training_module import TrainingModule
 
-from .conftest import HISTORY_MINS
+from .conftest import HISTORY_MINS, IMAGE_SIZE
 
 # Stand-ins for the repo and pinned commit a caller would name
 HF_REPO_ID = "some-org/some-model"
@@ -76,8 +76,8 @@ def downloaded_huggingface_dir(huggingface_dir, monkeypatch) -> str:
 
 
 def test_get_model_from_huggingface(downloaded_huggingface_dir):
-    """A model pushed to huggingface round-trips back to a model and its data config"""
-    model, data_config = get_model_from_huggingface(HF_REPO_ID, revision=HF_REVISION)
+    """A model pushed to huggingface round-trips back to a model, data config and grid"""
+    model, data_config, spatial_grid = get_model_from_huggingface(HF_REPO_ID, HF_REVISION)
 
     # The huggingface repo holds the bare model, whereas a checkpoint directory holds the training
     # module wrapping it - so a loader which conflated the two would fail here
@@ -85,6 +85,9 @@ def test_get_model_from_huggingface(downloaded_huggingface_dir):
     assert not isinstance(model, TrainingModule)
 
     assert data_config["history_mins"] == HISTORY_MINS
+
+    assert len(spatial_grid.x_geostationary) == IMAGE_SIZE
+    assert len(spatial_grid.y_geostationary) == IMAGE_SIZE
 
     # `strict=True` already catches a key mismatch. This catches the weights never being loaded at
     # all, which leaves the model randomly initialised and forecasting silently wrong
