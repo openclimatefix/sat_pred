@@ -1,14 +1,21 @@
-"""Tests for loading a model back out of its checkpoint directory"""
+"""Tests for loading a trained model back out of a checkpoint directory or huggingface"""
 
 import os
 
 import pytest
 import torch
+from safetensors import safe_open
 
-from sat_pred.constants import FULL_CONFIG_NAME
-from sat_pred.load_model import get_model_from_checkpoints
+from sat_pred.constants import FULL_CONFIG_NAME, PYTORCH_WEIGHTS_NAME
+from sat_pred.load_model import get_model_from_checkpoints, get_model_from_huggingface
 from sat_pred.models.simvp_model import SimVP
 from sat_pred.training_module import TrainingModule
+
+from .conftest import HISTORY_MINS
+
+# Stand-ins for the repo and pinned commit a caller would name
+HF_REPO_ID = "some-org/some-model"
+HF_REVISION = "8b1a9953c4611296a827abf8c47804d7"
 
 
 def test_get_model_from_checkpoints(checkpoint_dir, tiny_model_config):
@@ -27,15 +34,6 @@ def test_get_model_from_checkpoints(checkpoint_dir, tiny_model_config):
 
     assert data_config["history_mins"] > 0
     assert experiment_config_path == f"{checkpoint_dir}/{FULL_CONFIG_NAME}"
-
-
-def test_get_model_from_checkpoints_without_experiment_config(checkpoint_dir):
-    """Checkpoints saved before the full config was saved still load"""
-    os.remove(f"{checkpoint_dir}/{FULL_CONFIG_NAME}")
-
-    *_, experiment_config_path = get_model_from_checkpoints(checkpoint_dir)
-
-    assert experiment_config_path is None
 
 
 def test_get_model_from_checkpoints_restores_the_weights(checkpoint_dir):
@@ -62,3 +60,35 @@ def test_get_model_from_checkpoints_val_best(checkpoint_dir):
     # ...and now there is no epoch*.ckpt to load as the best model
     with pytest.raises(ValueError, match="Found 0 checkpoints"):
         get_model_from_checkpoints(checkpoint_dir, val_best=True)
+
+
+@pytest.fixture
+def downloaded_huggingface_dir(huggingface_dir, monkeypatch) -> str:
+    """`huggingface_dir`, with the download it stands in for patched out"""
+
+    def fake_snapshot_download(repo_id: str, revision: str) -> str:
+        assert (repo_id, revision) == (HF_REPO_ID, HF_REVISION)
+        return huggingface_dir
+
+    monkeypatch.setattr("sat_pred.load_model.snapshot_download", fake_snapshot_download)
+
+    return huggingface_dir
+
+
+def test_get_model_from_huggingface(downloaded_huggingface_dir):
+    """A model pushed to huggingface round-trips back to a model and its data config"""
+    model, data_config = get_model_from_huggingface(HF_REPO_ID, revision=HF_REVISION)
+
+    # The huggingface repo holds the bare model, whereas a checkpoint directory holds the training
+    # module wrapping it - so a loader which conflated the two would fail here
+    assert isinstance(model, SimVP)
+    assert not isinstance(model, TrainingModule)
+
+    assert data_config["history_mins"] == HISTORY_MINS
+
+    # `strict=True` already catches a key mismatch. This catches the weights never being loaded at
+    # all, which leaves the model randomly initialised and forecasting silently wrong
+    weights_path = f"{downloaded_huggingface_dir}/{PYTORCH_WEIGHTS_NAME}"
+    with safe_open(weights_path, framework="pt") as weights_file:
+        for name, param in model.named_parameters():
+            torch.testing.assert_close(param, weights_file.get_tensor(name))

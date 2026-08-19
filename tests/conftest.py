@@ -14,9 +14,15 @@ import pytest
 import torch
 import xarray as xr
 import yaml
+from safetensors.torch import save_model as save_model_as_safetensor
 
 from sat_pred.channels import ChannelConfig
-from sat_pred.constants import DATA_CONFIG_NAME, FULL_CONFIG_NAME, MODEL_CONFIG_NAME
+from sat_pred.constants import (
+    DATA_CONFIG_NAME,
+    FULL_CONFIG_NAME,
+    MODEL_CONFIG_NAME,
+    PYTORCH_WEIGHTS_NAME,
+)
 
 # The channel config the training configs use
 CHANNELS_PATH = Path(__file__).parents[1] / "configs/datamodule/channels/seviri_rss.yaml"
@@ -219,5 +225,25 @@ def checkpoint_dir(tmp_path, training_module_config) -> str:
     )
 
     torch.save({"state_dict": training_module.state_dict()}, tmp_path / "epoch=1-step=10.ckpt")
+
+    return str(tmp_path)
+
+
+@pytest.fixture
+def huggingface_dir(tmp_path, tiny_model_config) -> str:
+    """A directory in the layout `push_checkpoint_to_huggingface.py` pushes to huggingface
+
+    Unlike `checkpoint_dir`, the model config here describes the bare model rather than the
+    training module wrapping it, and the weights are safetensors rather than a lightning
+    checkpoint.
+    """
+    model = hydra.utils.instantiate(tiny_model_config)
+
+    (tmp_path / MODEL_CONFIG_NAME).write_text(yaml.dump(tiny_model_config))
+    (tmp_path / DATA_CONFIG_NAME).write_text(
+        yaml.dump({"history_mins": HISTORY_MINS, "forecast_mins": FORECAST_MINS})
+    )
+
+    save_model_as_safetensor(model, str(tmp_path / PYTORCH_WEIGHTS_NAME))
 
     return str(tmp_path)
