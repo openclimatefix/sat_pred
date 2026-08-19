@@ -2,7 +2,7 @@
 
 use:
 python push_checkpoint_to_huggingface.py "path/to/model/checkpoints" \
-    --huggingface-repo="openclimatefix/cloudcasting_uk" \
+    --huggingface-repo="openclimatefix-models/cloudcasting_uk" \
     --wandb-repo="openclimatefix/sat_pred" \
     --local-path="~/tmp/this_model" \
     --no-push-to-hub

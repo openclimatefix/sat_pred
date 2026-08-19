@@ -18,7 +18,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
-    "torch",
+    # Pinned, and kept equal to the pin in cloudcasting-app's pyproject.toml. The backtest here and
+    # the inference app there are meant to give identical predictions, and torch moves its conv
+    # kernels and algorithm selection between releases
+    "torch==2.13.0",
     "lightning",
     "numpy",
     "pandas",
