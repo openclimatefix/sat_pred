@@ -143,11 +143,11 @@ def test_greyscale_range_label_reports_physical_values():
         -3.0,
         3.0,
         ChannelNormalisation(
-            mean=263.5, std=16.0, clip_min=190, clip_max=320, missing_value=174, units="K"
+            mean=263.5, std=16.0, clip_min=190, clip_max=320, missing_value=174
         ),
     )
 
-    assert label == "[216-312K]"
+    assert label == "[216-312]"
 
 
 def test_losses_ignore_missing_pixels(training_module_config):

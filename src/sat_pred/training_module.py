@@ -66,7 +66,7 @@ def greyscale_range_label(
     """
     low = normalisation.mean + vmin * normalisation.std
     high = normalisation.mean + vmax * normalisation.std
-    return f"[{low:.0f}-{high:.0f}{normalisation.units}]"
+    return f"[{low:.0f}-{high:.0f}]"
 
 
 def upload_video(

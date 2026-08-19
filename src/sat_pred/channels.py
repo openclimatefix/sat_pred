@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import numpy as np
+import torch
 import yaml
 from numpy.typing import NDArray
 from pydantic import BaseModel, Field, RootModel, model_validator
@@ -35,18 +36,17 @@ from pydantic import BaseModel, Field, RootModel, model_validator
 class ChannelNormalisation(BaseModel):
     """How a single satellite channel is clipped and z-scored"""
 
-    mean: float = Field(description="Mean of the channel after clipping, in `units`")
+    mean: float = Field(description="Mean of the channel after clipping, in physical units")
     std: float = Field(gt=0, description="Standard deviation of the channel after clipping")
     clip_min: float = Field(description="Values below this are clipped up to it")
     clip_max: float = Field(description="Values above this are clipped down to it")
     missing_value: float = Field(
         description=(
-            "What the model is shown in place of a missing pixel, in `units`. Usually set below "
-            "`clip_min` so it cannot be confused for a real reading, but that is not enforced - "
-            "setting it to `mean` to fill gaps with the channel average is equally valid"
+            "What the model is shown in place of a missing pixel, in physical units. Usually set "
+            "below `clip_min` so it cannot be confused for a real reading, but that is not "
+            "enforced - setting it to `mean` to fill gaps with the channel average is equally valid"
         )
     )
-    units: str = Field(default="", description="Physical units, used to label plots if given")
 
     @model_validator(mode="after")
     def _check_clip_range(self) -> "ChannelNormalisation":
@@ -147,6 +147,67 @@ class ChannelNormaliser:
         carry missing pixels as NaN the way the target does.
         """
         return np.where(np.isnan(values), self.missing_fill_value, values).astype(np.float32)
+
+
+class TorchChannelNormaliser:
+    """A `ChannelNormaliser`'s constants, held as tensors on the device the model runs on
+
+    This normalises **batched** samples shaped (batch, channel, time, y, x), whereas
+    `ChannelNormaliser` works on a single (channel, time, y, x) sample - that leading dimension is
+    why the constants here carry one more axis than the numpy ones.
+
+    Normalising on the model's device rather than in the dataloader workers means the samples reach
+    the main process as the raw values the store holds, which for a float16 store is half the bytes
+    of the normalised float32 the workers would otherwise send, and puts none of the arithmetic on
+    the process the model is waiting on.
+
+    The interface and the arithmetic are the same as `ChannelNormaliser`'s, in the same float32,
+    so the two give the same predictions - `tests/test_channels.py` pins them together.
+    """
+
+    def __init__(self, normaliser: ChannelNormaliser, device: torch.device):
+        """Move a `ChannelNormaliser`'s constants onto a device
+
+        Args:
+            normaliser: The normaliser holding the constants of each channel
+            device: The device the samples are normalised on
+        """
+
+        def constant(values: NDArray[np.float32]) -> torch.Tensor:
+            # `ChannelNormaliser` shapes its constants to broadcast against a single sample. The
+            # samples here are batched, so they need one more leading dimension
+            return torch.as_tensor(values, dtype=torch.float32, device=device).unsqueeze(0)
+
+        self.mean = constant(normaliser.mean)
+        self.std = constant(normaliser.std)
+        self.clip_min = constant(normaliser.clip_min)
+        self.clip_max = constant(normaliser.clip_max)
+        self.missing_fill_value = constant(normaliser.missing_fill_value)
+
+    def normalise(self, values: torch.Tensor) -> torch.Tensor:
+        """Clip each channel to its physical range and convert it to a z-score
+
+        Missing pixels stay NaN.
+
+        Samples arrive in whatever dtype the store holds and are cast to float32 up front, so the
+        arithmetic runs at a fixed precision rather than one the input dtype picks by promotion.
+        Note this narrows float64 - the one input for which `ChannelNormaliser`, which casts at the
+        end instead, gives a different answer. The stores hold float32 or float16.
+        """
+        clipped = values.to(torch.float32).clamp(self.clip_min, self.clip_max)
+        return (clipped - self.mean) / self.std
+
+    def denormalise(self, values: torch.Tensor) -> torch.Tensor:
+        """Convert z-scores back to physical units"""
+        return values * self.std + self.mean
+
+    def fill_missing(self, values: torch.Tensor) -> torch.Tensor:
+        """Replace missing pixels with `missing_fill_value`
+
+        Convolutions spread a NaN across everything downstream of it, so the model input cannot
+        carry missing pixels as NaN the way the target does.
+        """
+        return torch.where(values.isnan(), self.missing_fill_value, values)
 
 
 # The forms a channel config can be supplied in. Hydra passes a mapping read from the config

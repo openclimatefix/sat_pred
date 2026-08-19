@@ -1,32 +1,23 @@
-"""Tests for the channel config and the normaliser built from it"""
+"""Tests for the channel config and the normalisers built from it"""
 
 import numpy as np
 import pytest
+import torch
 import yaml
 from pydantic import ValidationError
 
-from sat_pred.channels import ChannelConfig, parse_channel_config
+from sat_pred.channels import ChannelConfig, TorchChannelNormaliser, parse_channel_config
 
 CONSTANTS = {
     "IR_108": {
         "mean": 260.0, "std": 10.0, "clip_min": 200.0, "clip_max": 320.0,
-        "missing_value": 190.0, "units": "K",
+        "missing_value": 190.0,
     },
     "VIS008": {
         "mean": 10.0, "std": 5.0, "clip_min": 0.0, "clip_max": 100.0,
-        "missing_value": -5.0, "units": "%",
+        "missing_value": -5.0,
     },
 }
-
-
-def test_units_are_optional():
-    """The shipped config gives no units, but a config may"""
-    without_units = parse_channel_config(
-        {"IR_108": {k: v for k, v in CONSTANTS["IR_108"].items() if k != "units"}}
-    )
-
-    assert without_units["IR_108"].units == ""
-    assert parse_channel_config(CONSTANTS)["IR_108"].units == "K"
 
 
 def test_a_config_can_come_from_a_mapping_or_a_path(tmp_path):
@@ -149,3 +140,45 @@ def test_the_missing_value_may_sit_inside_the_clip_range():
     normaliser = parse_channel_config(constants).normaliser
 
     assert normaliser.missing_fill_value.item() == 0.0
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float16])
+def test_the_torch_normaliser_matches_the_numpy_one(dtype):
+    """The two implementations must agree, or the backtest and inference pathways would diverge
+
+    Float64 input is the one case where they do not: numpy clips in float64 and casts to float32 at
+    the end, whereas torch casts first and clips in float32. The satellite stores hold float32 or
+    float16, which is what this covers.
+    """
+    numpy_normaliser = parse_channel_config(CONSTANTS).normaliser
+    torch_normaliser = TorchChannelNormaliser(numpy_normaliser, torch.device("cpu"))
+
+    # Below clip_min, inside the range, above clip_max, and missing - for each channel of each of
+    # the two samples in the batch
+    values = np.array(
+        [
+            [[[[100.0, 260.0, 400.0, np.nan]]], [[[-50.0, 10.0, 500.0, np.nan]]]],
+            [[[[199.0, 300.0, 321.0, np.nan]]], [[[-0.5, 90.0, 100.5, np.nan]]]],
+        ],
+        dtype=dtype,
+    )
+
+    # The torch normaliser takes the batch; the numpy one takes a sample at a time
+    def with_numpy(method: str, batch: np.ndarray) -> np.ndarray:
+        return np.stack([getattr(numpy_normaliser, method)(sample) for sample in batch])
+
+    # `assert_allclose` counts NaN as equal, so this also pins where the missing pixels survive
+    normalised = torch_normaliser.normalise(torch.from_numpy(values))
+    np.testing.assert_allclose(normalised.numpy(), with_numpy("normalise", values), rtol=1e-6)
+
+    filled = torch_normaliser.fill_missing(normalised)
+    np.testing.assert_allclose(
+        filled.numpy(), with_numpy("fill_missing", normalised.numpy()), rtol=1e-6
+    )
+    assert not np.isnan(filled.numpy()).any()
+
+    np.testing.assert_allclose(
+        torch_normaliser.denormalise(filled).numpy(),
+        with_numpy("denormalise", filled.numpy()),
+        rtol=1e-6,
+    )

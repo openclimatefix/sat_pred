@@ -8,7 +8,7 @@
 # Each channel is clipped to [clip_min, clip_max] and then turned into a z-score using `mean` and
 # `std`, which are of the channel after clipping and share its units. The visible and near infrared
 # channels are bidirectional reflectances in percent, the rest are brightness temperatures in
-# Kelvin. An optional `units` per channel is used to label the validation videos.
+# Kelvin.
 #
 # `missing_value` is what the model is shown where the satellite recorded nothing. It is in the
 # same physical units and is z-scored but not clipped, so it can sit outside [clip_min, clip_max].

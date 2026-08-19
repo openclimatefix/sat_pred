@@ -39,7 +39,7 @@ import typer
 import yaml
 import zarr
 
-from sat_pred.channels import ChannelNormaliser, parse_channel_config
+from sat_pred.channels import TorchChannelNormaliser, parse_channel_config
 from sat_pred.dataset import SatelliteDataset, TimePeriod
 from sat_pred.load_model import get_model_from_checkpoints
 
@@ -70,50 +70,6 @@ compressor = zarr.codecs.BloscCodec(
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
-class DeviceNormaliser:
-    """The channel normalisation constants, held as tensors on the model's device
-
-    The backtest normalises on the same device the model runs on rather than in the dataloader
-    workers. The samples then reach this process as the raw values the store holds, which for a
-    float16 store is half the bytes of the normalised float32 the workers used to send, and none of
-    the arithmetic lands on the main process, which is the one the model is waiting on.
-
-    The arithmetic is the same as `ChannelNormaliser` does in numpy, in the same float32, so the
-    predictions are unchanged.
-    """
-
-    def __init__(self, normaliser: ChannelNormaliser, device: torch.device) -> None:
-        """Move a `ChannelNormaliser`'s constants onto a device
-
-        Args:
-            normaliser: The normaliser holding the constants of each channel
-            device: The device the samples are normalised on
-        """
-
-        def constant(values: NDArray[np.float32]) -> torch.Tensor:
-            # `ChannelNormaliser` shapes its constants to broadcast against a single sample. The
-            # samples here are batched, so they need one more leading dimension
-            return torch.as_tensor(values, dtype=torch.float32, device=device).unsqueeze(0)
-
-        self.mean = constant(normaliser.mean)
-        self.std = constant(normaliser.std)
-        self.clip_min = constant(normaliser.clip_min)
-        self.clip_max = constant(normaliser.clip_max)
-        self.missing_fill_value = constant(normaliser.missing_fill_value)
-
-    def normalise(self, values: torch.Tensor) -> torch.Tensor:
-        """Clip each channel to its physical range, z-score it, and fill the missing pixels"""
-        values = values.to(torch.float32).clamp(self.clip_min, self.clip_max)
-        values = (values - self.mean) / self.std
-        # Clipping leaves the missing pixels as NaN, and convolutions would spread each one across
-        # everything downstream of it
-        return torch.where(values.isnan(), self.missing_fill_value, values)
-
-    def denormalise(self, values: torch.Tensor) -> torch.Tensor:
-        """Convert z-scores back to physical units"""
-        return values * self.std + self.mean
-
-
 class MLModel:
     """A trained model, and the sample shape it was trained on, loaded from a checkpoint"""
 
@@ -140,7 +96,7 @@ class MLModel:
         self.forecast_mins = data_config['forecast_mins']
         self.channels = data_config['channels']
 
-        self.normaliser = DeviceNormaliser(
+        self.normaliser = TorchChannelNormaliser(
             parse_channel_config(self.channels).normaliser, device
         )
 
@@ -157,7 +113,8 @@ class MLModel:
             halves both the copy off the device and the bytes handed to the writer
         """
         X = X.to(self.device, non_blocking=True)
-        y_hat = self.model(self.normaliser.normalise(X))
+        X = self.normaliser.fill_missing(self.normaliser.normalise(X))
+        y_hat = self.model(X)
         return self.normaliser.denormalise(y_hat).to(torch.float16).cpu()
 
 
@@ -299,9 +256,10 @@ class BacktestSatelliteDataset(SatelliteDataset):
         # further
         da_input = da_input.compute()
 
-        # The raw images are handed on as they are stored, and normalised on the model's device
-        # instead - see `DeviceNormaliser`. Normalising here would widen a float16 store's samples
-        # to float32 before they are sent to the main process, doubling the bytes it has to copy
+        # The raw images are handed on as they are stored, and normalised on the model's
+        # device instead - see `TorchChannelNormaliser`. Normalising here would widen a float16
+        # store's samples to float32 before they are sent to the main process, doubling the bytes
+        # it has to copy
         return torch.from_numpy(da_input.values), t0
 
 
