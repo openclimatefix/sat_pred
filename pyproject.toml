@@ -18,9 +18,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
-    # Pinned, and kept equal to the pin in cloudcasting-app's pyproject.toml. The backtest here and
-    # the inference app there are meant to give identical predictions, and torch moves its conv
-    # kernels and algorithm selection between releases
+    # torch changes its conv kernels and default algorithm selection between release, so this pin
+    # is required for full reproducibility in trained models. This pin also locks the version used
+    # in the inference app
     "torch==2.13.0",
     "lightning",
     "numpy",
