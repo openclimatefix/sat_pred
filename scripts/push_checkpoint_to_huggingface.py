@@ -87,13 +87,16 @@ def save_model_to_huggingface(
     # Save model weights
     save_model_as_safetensor(model, f"{save_directory}/{PYTORCH_WEIGHTS_NAME}")
 
-    # Save model config
+    # Save model config. `sort_keys=False` for the same reason as the data config below
     with open(save_directory / MODEL_CONFIG_NAME, 'w') as outfile:
-        yaml.dump(model_config, outfile, default_flow_style=False)
+        yaml.dump(model_config, outfile, default_flow_style=False, sort_keys=False)
 
-    # Save the data config the model was trained with
+    # Save the data config the model was trained with. `sort_keys=False` because yaml.dump would
+    # otherwise sort every mapping in the config, including the channels - and the order the
+    # channels are written in is the order the model reads them, so sorting them silently changes
+    # which channel the model is shown at each index
     with open(save_directory / DATA_CONFIG_NAME, 'w') as outfile:
-        yaml.dump(data_config, outfile, default_flow_style=False)
+        yaml.dump(data_config, outfile, default_flow_style=False, sort_keys=False)
 
     # Save the grid the model was trained on. Unlike the experiment config below this is not
     # optional - without it nothing downstream can check that an input covers the area the model
